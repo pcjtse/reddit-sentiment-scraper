@@ -98,8 +98,8 @@
         </div>
 
         <footer>
-            <p>Data sourced from r/wallstreetbets, r/stocks, and r/investing</p>
-            <p class="demo-notice hidden" id="demoNotice">Running in demo mode - Configure Reddit API for live data</p>
+            <p>Live data sourced from r/wallstreetbets, r/stocks, and r/investing</p>
+            <p class="no-data-notice hidden" id="noDataNotice">Some symbols have no recent Reddit posts</p>
         </footer>
     </div>
 
@@ -307,9 +307,9 @@
                     updateTable(result.data);
                     document.getElementById('legend').classList.remove('hidden');
 
-                    // Check if any data is demo
-                    const hasDemo = result.data.some(d => d.is_demo);
-                    document.getElementById('demoNotice').classList.toggle('hidden', !hasDemo);
+                    // Check if any symbols have no Reddit data
+                    const hasNoData = result.data.some(d => d.no_data);
+                    document.getElementById('noDataNotice').classList.toggle('hidden', !hasNoData);
                 } else {
                     showError('No data returned for the provided symbols');
                 }
