@@ -1,6 +1,15 @@
+# Core dependencies
 praw==7.7.1
 nltk==3.8.1
 pandas==2.1.4
 matplotlib==3.8.2
 wordcloud==1.9.3
-python-dotenv==1.0.0 
+python-dotenv==1.0.0
+seaborn==0.13.0
+
+# Web UI dependencies
+flask==3.0.0
+yfinance==0.2.33
+
+# Optional: for better performance
+requests>=2.31.0

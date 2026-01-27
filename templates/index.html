@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reddit Sentiment Heatmap</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Reddit Sentiment Heatmap</h1>
+            <p class="subtitle">Visualize stock sentiment from Reddit communities</p>
+        </header>
+
+        <div class="controls">
+            <div class="input-group">
+                <label for="symbols">Stock Symbols (comma-separated):</label>
+                <input type="text" id="symbols" placeholder="AAPL, MSFT, GOOGL, TSLA..." value="{{ default_symbols }}">
+                <button id="analyzeBtn" onclick="analyzeSymbols()">Analyze</button>
+            </div>
+
+            <div class="presets">
+                <span class="preset-label">Quick Presets:</span>
+                <button class="preset-btn" onclick="loadPreset('tech')">Tech Giants</button>
+                <button class="preset-btn" onclick="loadPreset('finance')">Finance</button>
+                <button class="preset-btn" onclick="loadPreset('healthcare')">Healthcare</button>
+                <button class="preset-btn" onclick="loadPreset('meme')">Meme Stocks</button>
+                <button class="preset-btn" onclick="loadPreset('sp500_top10')">S&P 500 Top 10</button>
+                <button class="preset-btn" onclick="loadPreset('etfs')">ETFs</button>
+            </div>
+        </div>
+
+        <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <p>Analyzing sentiment... This may take a moment.</p>
+        </div>
+
+        <div id="error" class="error hidden"></div>
+
+        <div id="summary" class="summary hidden">
+            <div class="summary-card">
+                <span class="summary-value" id="totalSymbols">-</span>
+                <span class="summary-label">Stocks Analyzed</span>
+            </div>
+            <div class="summary-card">
+                <span class="summary-value" id="avgSentiment">-</span>
+                <span class="summary-label">Avg Sentiment</span>
+            </div>
+            <div class="summary-card bullish">
+                <span class="summary-value" id="bullishCount">-</span>
+                <span class="summary-label">Bullish</span>
+            </div>
+            <div class="summary-card bearish">
+                <span class="summary-value" id="bearishCount">-</span>
+                <span class="summary-label">Bearish</span>
+            </div>
+            <div class="summary-card neutral">
+                <span class="summary-value" id="neutralCount">-</span>
+                <span class="summary-label">Neutral</span>
+            </div>
+            <div class="summary-card">
+                <span class="summary-value" id="totalPosts">-</span>
+                <span class="summary-label">Reddit Posts</span>
+            </div>
+        </div>
+
+        <div id="heatmap" class="heatmap"></div>
+
+        <div id="legend" class="legend hidden">
+            <div class="legend-title">Sentiment Scale</div>
+            <div class="legend-bar">
+                <span class="legend-label">Bearish (-1)</span>
+                <div class="gradient-bar"></div>
+                <span class="legend-label">Bullish (+1)</span>
+            </div>
+            <div class="legend-note">
+                <strong>Size</strong> = Market Capitalization | <strong>Color</strong> = Reddit Sentiment
+            </div>
+        </div>
+
+        <div id="dataTable" class="data-table hidden">
+            <h3>Detailed Results</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Name</th>
+                        <th>Sentiment</th>
+                        <th>Posts</th>
+                        <th>Market Cap</th>
+                        <th>Sector</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+
+        <footer>
+            <p>Data sourced from r/wallstreetbets, r/stocks, and r/investing</p>
+            <p class="demo-notice hidden" id="demoNotice">Running in demo mode - Configure Reddit API for live data</p>
+        </footer>
+    </div>
+
+    <script>
+        let presets = {};
+
+        // Load presets on page load
+        fetch('/api/presets')
+            .then(response => response.json())
+            .then(data => { presets = data; })
+            .catch(err => console.error('Failed to load presets:', err));
+
+        function loadPreset(name) {
+            if (presets[name]) {
+                document.getElementById('symbols').value = presets[name].join(', ');
+                analyzeSymbols();
+            }
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').classList.toggle('hidden', !show);
+            document.getElementById('analyzeBtn').disabled = show;
+        }
+
+        function showError(message) {
+            const errorEl = document.getElementById('error');
+            errorEl.textContent = message;
+            errorEl.classList.remove('hidden');
+        }
+
+        function hideError() {
+            document.getElementById('error').classList.add('hidden');
+        }
+
+        function getSentimentColor(sentiment) {
+            // Create a color scale from red (bearish) to green (bullish)
+            // Sentiment ranges from -1 to 1
+            const normalized = (sentiment + 1) / 2; // Convert to 0-1 range
+
+            if (sentiment < -0.1) {
+                // Bearish: Red shades
+                const intensity = Math.abs(sentiment);
+                return `rgb(${180 + 75 * intensity}, ${60 - 40 * intensity}, ${60 - 40 * intensity})`;
+            } else if (sentiment > 0.1) {
+                // Bullish: Green shades
+                const intensity = sentiment;
+                return `rgb(${60 - 40 * intensity}, ${150 + 50 * intensity}, ${80 - 30 * intensity})`;
+            } else {
+                // Neutral: Yellow/amber
+                return 'rgb(200, 180, 80)';
+            }
+        }
+
+        function createTreemap(data) {
+            const labels = data.map(d => d.symbol);
+            const parents = data.map(() => '');
+            const values = data.map(d => d.market_cap);
+            const colors = data.map(d => d.sentiment);
+
+            const customdata = data.map(d => [
+                d.name,
+                d.sentiment.toFixed(3),
+                d.sentiment_label,
+                d.post_count,
+                d.market_cap_formatted,
+                d.sector,
+                d.avg_score
+            ]);
+
+            const trace = {
+                type: 'treemap',
+                labels: labels,
+                parents: parents,
+                values: values,
+                customdata: customdata,
+                texttemplate: '<b>%{label}</b><br>%{customdata[2]}<br>%{customdata[4]}',
+                textposition: 'middle center',
+                textfont: {
+                    size: 14,
+                    color: 'white'
+                },
+                hovertemplate:
+                    '<b>%{label}</b> - %{customdata[0]}<br>' +
+                    'Sentiment: %{customdata[1]} (%{customdata[2]})<br>' +
+                    'Reddit Posts: %{customdata[3]}<br>' +
+                    'Market Cap: %{customdata[4]}<br>' +
+                    'Sector: %{customdata[5]}<br>' +
+                    'Avg Post Score: %{customdata[6]}<extra></extra>',
+                marker: {
+                    colors: colors,
+                    colorscale: [
+                        [0, 'rgb(180, 40, 40)'],      // Strong bearish (red)
+                        [0.3, 'rgb(220, 100, 80)'],   // Bearish
+                        [0.45, 'rgb(200, 180, 80)'],  // Neutral (yellow)
+                        [0.55, 'rgb(180, 200, 100)'], // Slightly bullish
+                        [0.7, 'rgb(100, 180, 100)'],  // Bullish
+                        [1, 'rgb(40, 160, 80)']       // Strong bullish (green)
+                    ],
+                    cmin: -1,
+                    cmax: 1,
+                    showscale: false,
+                    line: {
+                        width: 2,
+                        color: 'rgba(255,255,255,0.5)'
+                    }
+                },
+                tiling: {
+                    packing: 'squarify',
+                    pad: 3
+                }
+            };
+
+            const layout = {
+                margin: { t: 10, l: 10, r: 10, b: 10 },
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                font: {
+                    family: 'Inter, system-ui, sans-serif'
+                }
+            };
+
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+                displaylogo: false
+            };
+
+            Plotly.newPlot('heatmap', [trace], layout, config);
+        }
+
+        function updateSummary(summary) {
+            document.getElementById('totalSymbols').textContent = summary.total_symbols;
+            document.getElementById('avgSentiment').textContent = summary.avg_sentiment.toFixed(3);
+            document.getElementById('bullishCount').textContent = summary.bullish_count;
+            document.getElementById('bearishCount').textContent = summary.bearish_count;
+            document.getElementById('neutralCount').textContent = summary.neutral_count;
+            document.getElementById('totalPosts').textContent = summary.total_posts.toLocaleString();
+
+            // Color the average sentiment
+            const avgEl = document.getElementById('avgSentiment');
+            avgEl.classList.remove('positive', 'negative', 'neutral-text');
+            if (summary.avg_sentiment > 0.1) {
+                avgEl.classList.add('positive');
+            } else if (summary.avg_sentiment < -0.1) {
+                avgEl.classList.add('negative');
+            } else {
+                avgEl.classList.add('neutral-text');
+            }
+
+            document.getElementById('summary').classList.remove('hidden');
+        }
+
+        function updateTable(data) {
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = '';
+
+            data.forEach(d => {
+                const row = document.createElement('tr');
+                const sentimentClass = d.sentiment > 0.1 ? 'positive' : (d.sentiment < -0.1 ? 'negative' : 'neutral-text');
+
+                row.innerHTML = `
+                    <td><strong>${d.symbol}</strong></td>
+                    <td>${d.name}</td>
+                    <td class="${sentimentClass}">${d.sentiment.toFixed(3)} (${d.sentiment_label})</td>
+                    <td>${d.post_count}</td>
+                    <td>${d.market_cap_formatted}</td>
+                    <td>${d.sector}</td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            document.getElementById('dataTable').classList.remove('hidden');
+        }
+
+        async function analyzeSymbols() {
+            const symbols = document.getElementById('symbols').value.trim();
+
+            if (!symbols) {
+                showError('Please enter at least one stock symbol');
+                return;
+            }
+
+            hideError();
+            showLoading(true);
+
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ symbols: symbols })
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Analysis failed');
+                }
+
+                if (result.data && result.data.length > 0) {
+                    createTreemap(result.data);
+                    updateSummary(result.summary);
+                    updateTable(result.data);
+                    document.getElementById('legend').classList.remove('hidden');
+
+                    // Check if any data is demo
+                    const hasDemo = result.data.some(d => d.is_demo);
+                    document.getElementById('demoNotice').classList.toggle('hidden', !hasDemo);
+                } else {
+                    showError('No data returned for the provided symbols');
+                }
+            } catch (error) {
+                showError(`Error: ${error.message}`);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        // Handle Enter key in input
+        document.getElementById('symbols').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                analyzeSymbols();
+            }
+        });
+
+        // Initial analysis on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            analyzeSymbols();
+        });
+    </script>
+</body>
+</html>
