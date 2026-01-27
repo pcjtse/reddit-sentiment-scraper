@@ -67,20 +67,6 @@ SUBREDDITS = ['wallstreetbets', 'stocks', 'investing']
 # Default stock symbols for quick analysis
 DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM', 'V', 'JNJ']
 
-# Demo data for when Reddit API is not available
-DEMO_DATA = {
-    'AAPL': {'sentiment': 0.35, 'posts': 145, 'market_cap': 2800000000000},
-    'MSFT': {'sentiment': 0.28, 'posts': 98, 'market_cap': 2750000000000},
-    'GOOGL': {'sentiment': 0.15, 'posts': 76, 'market_cap': 1700000000000},
-    'AMZN': {'sentiment': 0.22, 'posts': 112, 'market_cap': 1500000000000},
-    'TSLA': {'sentiment': -0.12, 'posts': 234, 'market_cap': 780000000000},
-    'META': {'sentiment': 0.08, 'posts': 67, 'market_cap': 900000000000},
-    'NVDA': {'sentiment': 0.52, 'posts': 189, 'market_cap': 1200000000000},
-    'JPM': {'sentiment': 0.18, 'posts': 43, 'market_cap': 450000000000},
-    'V': {'sentiment': 0.25, 'posts': 28, 'market_cap': 480000000000},
-    'JNJ': {'sentiment': 0.12, 'posts': 21, 'market_cap': 380000000000},
-}
-
 
 def analyze_sentiment(text):
     """Perform sentiment analysis on text using VADER."""
@@ -166,8 +152,13 @@ def get_posts_for_symbol(symbol, days=7):
 
 
 def analyze_symbol(symbol):
-    """Analyze sentiment for a single stock symbol."""
+    """Analyze sentiment for a single stock symbol using real Reddit data."""
     logger.info(f"Analyzing {symbol}...")
+
+    # Check if Reddit API is configured
+    if reddit is None:
+        logger.warning(f"Cannot analyze {symbol}: Reddit API not configured")
+        return None
 
     # Get stock info (market cap, name, etc.)
     stock_info = get_stock_info(symbol)
@@ -176,22 +167,19 @@ def analyze_symbol(symbol):
     posts = get_posts_for_symbol(symbol)
 
     if not posts:
-        # Use demo data if no posts found
-        if symbol in DEMO_DATA:
-            demo = DEMO_DATA[symbol]
-            return {
-                'symbol': symbol,
-                'name': stock_info['name'],
-                'sentiment': demo['sentiment'],
-                'post_count': demo['posts'],
-                'market_cap': stock_info['market_cap'] or demo['market_cap'],
-                'sector': stock_info['sector'],
-                'avg_score': 0,
-                'is_demo': True
-            }
-        return None
+        logger.info(f"No Reddit posts found for {symbol}")
+        return {
+            'symbol': symbol,
+            'name': stock_info['name'],
+            'sentiment': 0.0,
+            'post_count': 0,
+            'market_cap': stock_info['market_cap'],
+            'sector': stock_info['sector'],
+            'avg_score': 0,
+            'no_data': True
+        }
 
-    # Calculate sentiment
+    # Calculate sentiment from real Reddit posts
     sentiments = []
     total_score = 0
 
@@ -204,6 +192,8 @@ def analyze_symbol(symbol):
     avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
     avg_score = total_score / len(posts) if posts else 0
 
+    logger.info(f"Analyzed {symbol}: {len(posts)} posts, sentiment={avg_sentiment:.3f}")
+
     return {
         'symbol': symbol,
         'name': stock_info['name'],
@@ -212,7 +202,7 @@ def analyze_symbol(symbol):
         'market_cap': stock_info['market_cap'],
         'sector': stock_info['sector'],
         'avg_score': round(avg_score, 1),
-        'is_demo': False
+        'no_data': False
     }
 
 
@@ -255,7 +245,14 @@ def index():
 
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
-    """API endpoint to analyze stock symbols."""
+    """API endpoint to analyze stock symbols using real Reddit data."""
+    # Check if Reddit API is configured
+    if reddit is None:
+        return jsonify({
+            'error': 'Reddit API not configured. Please set REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, and REDDIT_USER_AGENT environment variables.',
+            'setup_required': True
+        }), 503
+
     data = request.get_json()
     symbols_input = data.get('symbols', '')
 
@@ -270,7 +267,7 @@ def api_analyze():
 
     logger.info(f"Analyzing symbols: {symbols}")
 
-    # Analyze symbols
+    # Analyze symbols using real Reddit data
     results = analyze_symbols_parallel(symbols)
 
     if not results:
@@ -290,7 +287,7 @@ def api_analyze():
                 'market_cap_formatted': format_market_cap(r['market_cap']),
                 'sector': r['sector'],
                 'avg_score': r['avg_score'],
-                'is_demo': r.get('is_demo', False)
+                'no_data': r.get('no_data', False)
             })
 
     # Sort by market cap for consistent ordering
@@ -338,12 +335,19 @@ def api_presets():
 if __name__ == '__main__':
     # Validate environment on startup
     if reddit is None:
-        logger.warning("=" * 60)
-        logger.warning("Reddit API not configured. Running in DEMO MODE.")
-        logger.warning("To enable live data, set these environment variables:")
-        logger.warning("  - REDDIT_CLIENT_ID")
-        logger.warning("  - REDDIT_CLIENT_SECRET")
-        logger.warning("  - REDDIT_USER_AGENT")
-        logger.warning("=" * 60)
+        logger.error("=" * 60)
+        logger.error("Reddit API credentials not configured!")
+        logger.error("The application requires valid Reddit API credentials.")
+        logger.error("")
+        logger.error("To set up Reddit API access:")
+        logger.error("1. Go to https://www.reddit.com/prefs/apps")
+        logger.error("2. Create a new application (script type)")
+        logger.error("3. Set these environment variables in your .env file:")
+        logger.error("   REDDIT_CLIENT_ID=<your_client_id>")
+        logger.error("   REDDIT_CLIENT_SECRET=<your_client_secret>")
+        logger.error("   REDDIT_USER_AGENT=RedditSentimentScraper/1.0")
+        logger.error("=" * 60)
+    else:
+        logger.info("Reddit API configured successfully")
 
     app.run(debug=True, host='0.0.0.0', port=5000)
